@@ -3,3 +3,6 @@
 /libltc-win-master
 /libltc-win-master.zip
 /StartLTC.bat
+build*
+dist*
+*.spec

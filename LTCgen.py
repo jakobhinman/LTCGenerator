@@ -133,8 +133,12 @@ libltc_name = None
 if sys.platform == "win32":
     # On Windows, look for 'libltc.dll' in the script's directory first.
     # This gets the directory the script is in, even if run from elsewhere.
-    script_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
-    local_dll_path = os.path.join(script_dir, 'libltc.dll')
+
+    if getattr(sys, 'frozen', False):
+        local_dll_path = file=os.path.join(sys._MEIPASS, 'libltc.dll') # type: ignore
+    else:
+        script_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+        local_dll_path = os.path.join(script_dir, 'libltc.dll')
 
     if os.path.exists(local_dll_path):
         libltc_name = local_dll_path
