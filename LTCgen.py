@@ -29,7 +29,7 @@ FRAMERATE_MAP = {
 
 # --- Configuration ---
 SAMPLE_RATE = 48000  # Audio sample rate in Hz
-FRAMERATE = 30       # LTC framerate (e.g., 24, 25, 29.97, 30)
+FRAMERATE = "30"       # LTC framerate (e.g., 24, 25, 29.97, 30)
 BUFFER_SIZE = 10     # Number of audio frames to buffer ahead of time
 
 
@@ -796,7 +796,7 @@ tk.Label(fr_frame, text="Framerate:", width=12, anchor='w').pack(side=tk.LEFT)
 
 # Get the keys from our map
 framerate_options = list(FRAMERATE_MAP.keys())
-selected_framerate.set(framerate_options[2]) # Default to "25"
+selected_framerate.set(framerate_options[list().index(FRAMERATE)]) # Default to FRAMERATE
 framerate_menu_widget = tk.OptionMenu(fr_frame, selected_framerate, *framerate_options)
 framerate_menu_widget.pack(fill=tk.X)
 
