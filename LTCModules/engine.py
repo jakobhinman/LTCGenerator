@@ -119,10 +119,10 @@ def ltc_generator_task(lib, start_tc_str, framerate_info, device_index,
                     lib.ltc_encoder_get_timecode(encoder, ctypes.byref(current_tc))
                     current_tc_string = format_timecode_struct(current_tc)
                 
-                try:
-                    gui_queue.put_nowait(current_tc_string)
-                except queue.Full:
-                    pass
+                # try:
+                #     gui_queue.put_nowait(current_tc_string)
+                # except queue.Full:
+                #     pass
             first_run = False
 
     finally:

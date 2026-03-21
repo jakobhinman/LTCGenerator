@@ -40,6 +40,9 @@ class GeneratorGUI:
         self.tc_entry = tk.Entry(set_frame, width=15, font=('Courier', 14))
         self.tc_entry.insert(0, "01:00:00:00")
         self.tc_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=10)
+        # Add focus out binding
+        self.tc_entry.bind("<FocusOut>", self.callbacks['tc_focus_out'])
+        
         tk.Button(set_frame, text="Set", command=self.callbacks['set']).pack(side=tk.LEFT)
 
         # Settings

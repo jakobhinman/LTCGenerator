@@ -1,5 +1,17 @@
 import re
 import ctypes
+
+# --- Framerate Mapping ---
+LTC_USE_DF = 1
+FRAMERATE_MAP = {
+    "23.98": (24.0 * 1000 / 1001, 0),
+    "24": (24.0, 0),
+    "25": (25.0, 0),
+    "29.97": (30.0 * 1000 / 1001, 0),
+    "29.97 DF": (30.0 * 1000 / 1001, LTC_USE_DF),
+    "30": (30.0, 0),
+}
+
 # Import the struct from main or define it here
 class SMPTETimecode(ctypes.Structure):
     _fields_ = [
@@ -35,3 +47,63 @@ def timecode_from_string(tc_str):
 def format_timecode_struct(tc_struct):
     """Formats an SMPTETimecode struct back into a string."""
     return f"{tc_struct.hours:02}:{tc_struct.mins:02}:{tc_struct.secs:02}:{tc_struct.frame:02}"
+
+def normalize_timecode(tc_str, fr_name):
+    """
+    Flexibly parses user input (e.g., '0.30.12.1' or '12 1') and 
+    returns a standard HH:MM:SS:FF or HH:MM:SS;FF string.
+    """
+    # Split by any non-digit character
+    parts = re.split(r'[^0-9]+', tc_str.strip())
+    # Filter out empty strings from re.split
+    parts = [p for p in parts if p]
+    
+    # Pad to 4 parts (HH, MM, SS, FF)
+    while len(parts) < 4:
+        parts.insert(0, "00")
+    
+    # Take only the last 4 if user entered too many
+    parts = parts[-4:]
+    
+    # Standardize to 2 digits each
+    h, m, s, f = [p.zfill(2) for p in parts]
+    
+    # Determine separator for frames (';' for DF, ':' for NDF)
+    fr_info = FRAMERATE_MAP.get(fr_name, (30.0, 0))
+    sep = ";" if (fr_info[1] & LTC_USE_DF) else ":"
+    
+    return f"{h}:{m}:{s}{sep}{f}"
+
+def is_timecode_valid(tc_str, fr_name):
+    """
+    Checks if a timecode string is valid for a given framerate,
+    including max frame and drop-frame (DF) rules.
+    """
+    if fr_name not in FRAMERATE_MAP:
+        return False, "Unknown framerate"
+        
+    fps_val, flags = FRAMERATE_MAP[fr_name]
+    
+    try:
+        # Match digits regardless of separator used
+        parts = re.split(r'[^0-9]+', tc_str)
+        parts = [p for p in parts if p]
+        h, m, s, f = [int(p) for p in parts]
+    except (ValueError, IndexError):
+        return False, "Invalid format"
+
+    if h >= 24 or m >= 60 or s >= 60:
+        return False, "Time component out of range"
+
+    # Check max frame
+    max_frame = int(round(fps_val))
+    if f >= max_frame:
+        return False, f"Frame {f} is >= max {max_frame}fps"
+
+    # Check Drop-Frame (DF) rules
+    if (flags & LTC_USE_DF):
+        # Frames 00 and 01 are dropped at start of every minute except 0, 10, 20...
+        if f < 2 and s == 0 and m % 10 != 0:
+            return False, f"DF time {tc_str} does not exist"
+    
+    return True, "Valid"

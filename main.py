@@ -1,4 +1,5 @@
 import tkinter as tk
+from tkinter import messagebox
 import threading
 import queue
 import sys
@@ -6,7 +7,7 @@ import os
 import ctypes
 
 # Import our new modules
-from LTCModules.helpers import timecode_from_string, SMPTETimecode
+from LTCModules.helpers import timecode_from_string, SMPTETimecode, FRAMERATE_MAP, normalize_timecode, is_timecode_valid
 import LTCModules.audio_utils
 from LTCModules.audio_utils import get_output_devices, warm_up_audio_system
 from LTCModules.engine import ltc_generator_task
@@ -16,17 +17,6 @@ from LTCModules.gui import GeneratorGUI
 SAMPLE_RATE = 48000
 BUFFER_SIZE = 10
 LIBLTC_DLL = "libltc.dll"
-
-# --- Framerate Mapping ---
-LTC_USE_DF = 1
-FRAMERATE_MAP = {
-    "23.98": (24.0 * 1000 / 1001, 0),
-    "24": (24.0, 0),
-    "25": (25.0, 0),
-    "29.97": (30.0 * 1000 / 1001, 0),
-    "29.97 DF": (30.0 * 1000 / 1001, LTC_USE_DF),
-    "30": (30.0, 0),
-}
 
 class LTCApp:
     def __init__(self):
@@ -56,7 +46,8 @@ class LTCApp:
             'stop': self.on_stop,
             'pause': self.on_pause,
             'set': self.on_set,
-            'load_jam': self.on_load_jam_list
+            'load_jam': self.on_load_jam_list,
+            'tc_focus_out': self.on_tc_focus_out
         }
         
         self.gui = GeneratorGUI(self.root, device_names, list(FRAMERATE_MAP.keys()), callbacks)
@@ -65,6 +56,15 @@ class LTCApp:
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         self.update_gui_loop()
         self.gui_loaded = True
+
+    def on_tc_focus_out(self, event=None):
+        raw_tc = self.gui.tc_entry.get()
+        fr_name = self.gui.selected_framerate.get()
+        
+        # Normalize the entry field instantly
+        normalized = normalize_timecode(raw_tc, fr_name)
+        self.gui.tc_entry.delete(0, tk.END)
+        self.gui.tc_entry.insert(0, normalized)
 
     def load_libltc(self):
         script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -125,26 +125,70 @@ class LTCApp:
         self.gui.lock_ui(False)
 
     def on_set(self):
+        # Trigger the same normalization as focus out
+        self.on_tc_focus_out()
         new_tc = self.gui.tc_entry.get()
-        try:
-            timecode_from_string(new_tc)
+        fr_name = self.gui.selected_framerate.get()
+        
+        valid, err = is_timecode_valid(new_tc, fr_name)
+        if valid:
             if self.generator_thread and self.generator_thread.is_alive():
                 self.command_queue.put(new_tc)
             else:
                 self.gui.current_tc_str.set(new_tc)
-        except ValueError as e:
-            self.gui.current_tc_str.set("ERR: Format")
+        else:
+            messagebox.showwarning("Invalid TC", err)
 
     def on_load_jam_list(self):
-        # Implementation of parsing logic (trigger > target)
+        """Validates the jam list for the separator and valid timecodes."""
         text = self.gui.jammer_text.get("1.0", tk.END).splitlines()
+        fr_name = self.gui.selected_framerate.get()
         new_map = {}
-        for line in text:
-            if ">" in line:
-                parts = line.split(">")
-                new_map[parts[0].strip()] = parts[1].strip()
-        self.jam_map = new_map
-        print(f"Loaded {len(self.jam_map)} jams.")
+        processed_lines = []
+        errors = []
+
+        for i, line in enumerate(text):
+            line = line.strip()
+            # Skip empty lines or comments
+            if not line or line.startswith(("#", "//")):
+                processed_lines.append(line)
+                continue
+                
+            # ENFORCE SEPARATOR
+            if ">" not in line:
+                errors.append(f"Line {i+1}: Missing '>' separator")
+                processed_lines.append(line)
+                continue
+
+            parts = line.split(">")
+            trigger_raw = parts[0].strip()
+            target_raw = parts[1].strip()
+            
+            # This turns "59.29" into "00:00:59:29" so validation can read it
+            n_trig = normalize_timecode(trigger_raw, fr_name)
+            n_targ = normalize_timecode(target_raw, fr_name)
+            
+            # Now validate the standardized strings
+            v_trig, e_trig = is_timecode_valid(n_trig, fr_name)
+            v_targ, e_targ = is_timecode_valid(n_targ, fr_name)
+            
+            if v_trig and v_targ:
+                new_map[n_trig] = n_targ
+                processed_lines.append(f"{n_trig} > {n_targ}")
+            else:
+                err_msg = e_trig if not v_trig else e_targ
+                errors.append(f"Line {i+1}: {err_msg}")
+                processed_lines.append(line)
+
+        if errors:
+            # Show all errors at once in a messagebox
+            messagebox.showerror("Jam List Errors", "\n".join(errors))
+        else:
+            # Update the text box with beautiful, normalized timecodes
+            self.gui.jammer_text.delete("1.0", tk.END)
+            self.gui.jammer_text.insert("1.0", "\n".join(processed_lines))
+            self.jam_map = new_map
+            messagebox.showinfo("Success", f"Loaded {len(self.jam_map)} valid jams.")
 
     def update_gui_loop(self):
         # Update Timecode
