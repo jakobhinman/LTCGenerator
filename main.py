@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, filedialog
 import threading
 import queue
 import sys
@@ -12,6 +12,7 @@ import LTCModules.audio_utils
 from LTCModules.audio_utils import get_output_devices, warm_up_audio_system
 from LTCModules.engine import ltc_generator_task
 from LTCModules.gui import GeneratorGUI
+from LTCModules.baker import AdvancedBaker
 
 # --- Configuration ---
 SAMPLE_RATE = 48000
@@ -35,7 +36,7 @@ class LTCApp:
         
         # 1. Load libltc
         self.lib = self.load_libltc()
-        
+        self.baker = AdvancedBaker(self.lib)        
         # 2. Setup Audio
         warm_up_audio_system()
         device_names, self.device_map = get_output_devices()
@@ -47,7 +48,8 @@ class LTCApp:
             'pause': self.on_pause,
             'set': self.on_set,
             'load_jam': self.on_load_jam_list,
-            'tc_focus_out': self.on_tc_focus_out
+            'tc_focus_out': self.on_tc_focus_out,
+            'bake': self.on_bake
         }
         
         self.gui = GeneratorGUI(self.root, device_names, list(FRAMERATE_MAP.keys()), callbacks)
@@ -56,6 +58,59 @@ class LTCApp:
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         self.update_gui_loop()
         self.gui_loaded = True
+    
+    def update_bake_status(self, message):
+        """Updates the GUI status label from the background thread."""
+        # Use .after to ensure the UI update happens on the main thread
+        self.root.after(0, lambda: self.gui.status_msg.set(message))
+        # Also print to console for debugging
+        print(f"[Bake Progress] {message}")
+
+    def on_bake(self):
+        """Triggers the Advanced Baker process."""
+        music_folder = self.gui.music_dir.get()
+        if music_folder == "Not Selected" or not os.path.exists(music_folder):
+            messagebox.showerror("Error", "Please select a valid music folder first.")
+            return
+
+        # Prepare settings
+        try:
+            pad_secs = float(self.gui.pad_entry.get())
+        except ValueError:
+            pad_secs = 30.0
+            
+        fr_name = self.gui.selected_framerate.get()
+        start_tc = self.gui.tc_entry.get()
+        
+        # Determine output file path
+        output_file = filedialog.asksaveasfilename(
+            defaultextension=".wav",
+            filetypes=[("WAV files", "*.wav")],
+            initialfile="Master_Bake.wav"
+        )
+        
+        if not output_file:
+            return
+
+        # Disable UI during bake
+        self.gui.bake_btn.config(state="disabled", text="BAKING...")
+        
+        def run_bake():
+            try:
+                success = self.baker.bake(
+                    music_folder, self.jam_map, pad_secs, 
+                    fr_name, start_tc, output_file,progress_cb=self.update_bake_status
+                )
+                if success:
+                    self.root.after(0, lambda: messagebox.showinfo("Success", f"Bake Complete!\nSaved to: {output_file}"))
+                    self.root.after(0, lambda: self.gui.master_file.set(output_file))
+            except Exception as e:
+                err_msg=str(e)
+                self.root.after(0, lambda: messagebox.showerror("Bake Error", err_msg))
+            finally:
+                self.root.after(0, lambda: self.gui.bake_btn.config(state="normal", text="BAKE MASTER FILE"))
+
+        threading.Thread(target=run_bake, daemon=True).start()
 
     def on_tc_focus_out(self, event=None):
         raw_tc = self.gui.tc_entry.get()
@@ -94,21 +149,43 @@ class LTCApp:
             self.stop_event.clear()
             self.pause_event.clear()
             
-            # Unpack GUI settings
+            # Unpack standard settings
             start_tc = self.gui.tc_entry.get()
             fr_name = self.gui.selected_framerate.get()
             fr_info = FRAMERATE_MAP[fr_name]
             dev_name = self.gui.selected_device.get()
             dev_index = self.device_map[dev_name]
             
+            # --- NEW: Check for Advanced Mode ---
+            active_tab = self.gui.notebook.index(self.gui.notebook.select())
+            baked_path = None
+            if active_tab == 1: # Advanced Tab
+                baked_path = self.gui.master_file.get()
+                if baked_path == "No Bake Loaded" or not os.path.exists(baked_path):
+                    messagebox.showerror("Error", "Please load a baked Master file first.")
+                    return
+                try:
+                    ch_map = [
+                        int(self.gui.ltc_ch_entry.get()) - 1,
+                        int(self.gui.music_l_entry.get()) - 1,
+                        int(self.gui.music_r_entry.get()) - 1
+                    ]
+                except ValueError: ch_map = [0, 1, 2]
+                meta = self.current_baked_meta
+
             self.gui.lock_ui(True)
             self.generator_thread = threading.Thread(
                 target=ltc_generator_task,
                 args=(self.lib, start_tc, fr_info, dev_index, self.jam_map.copy(),
                       self.stop_event, self.pause_event, self.audio_queue, 
-                      self.gui_queue, self.command_queue, SAMPLE_RATE),
+                      self.gui_queue, self.command_queue, SAMPLE_RATE,
+                      baked_path), # Pass the path here
                 daemon=True
             )
+            ltc_generator_task(self.lib, start_tc, fr_info, dev_index, self.jam_map.copy(),
+                      self.stop_event, self.pause_event, self.audio_queue, 
+                      self.gui_queue, self.command_queue, SAMPLE_RATE,
+                      baked_path,channel_map=ch_map,baked_meta=meta)
             self.generator_thread.start()
 
     def on_pause(self):
