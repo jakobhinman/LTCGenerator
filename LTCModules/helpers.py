@@ -25,6 +25,37 @@ class SMPTETimecode(ctypes.Structure):
         ("frame", ctypes.c_uint8),
     ]
 
+def samples_to_tc(sample_index, sample_rate, fr_name, start_tc_str):
+    """
+    Calculates the current timecode string based on sample position and start TC.
+    """
+    fps_val = FRAMERATE_MAP[fr_name][0]
+    # Calculate offset in frames
+    total_offset_frames = int((sample_index / sample_rate) * fps_val)
+    
+    # Parse start TC
+    parts = re.split(r'[^0-9]+', start_tc_str)
+    parts = [p for p in parts if p]
+    h, m, s, f = map(int, parts)
+    
+    # Calculate total frames at start
+    start_total_frames = int(((h * 3600) + (m * 60) + s) * fps_val) + f
+    
+    # New total frames
+    current_total_frames = start_total_frames + total_offset_frames
+    
+    # Break back into TC
+    f_new = int(current_total_frames % fps_val)
+    remaining_s = int(current_total_frames // fps_val)
+    s_new = remaining_s % 60
+    remaining_m = remaining_s // 60
+    m_new = remaining_m % 60
+    h_new = remaining_m // 60
+    
+    # Use semicolon for DF rates
+    sep = ";" if (FRAMERATE_MAP[fr_name][1] & LTC_USE_DF) else ":"
+    return f"{h_new:02}:{m_new:02}:{s_new:02}{sep}{f_new:02}"
+
 def timecode_from_string(tc_str):
     """Parses a 'HH:MM:SS:FF' string into an SMPTETimecode struct."""
     parts = re.split('[:;]', tc_str) # Allow : or ;
